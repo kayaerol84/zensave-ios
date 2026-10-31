@@ -10,11 +10,15 @@ public enum NudgeNotification {
     public static let choicePrefix = "choice:"
 }
 
-/// Screen Time event names are `"<appID>.<minutes>"`, e.g. `"ig.20"`.
+/// Daily usage events (for the Today screen) are named `"<appID>.<minutes>"`, e.g. `"ig.20"`.
+/// Nudges don't come from these; they come from sessions (see `Session.swift`).
 public enum ScreenTimeEvent {
     public static let activityName = "zen.daily"
-    /// Progress is sampled every `step` minutes so the Today screen can show usage.
+    /// Usage is sampled every `step` minutes for the first hour...
     public static let step = 5
+    /// ...then every `longStep` minutes up to `ceiling`.
+    public static let longStep = 15
+    public static let ceiling = 180
 
     public static func name(appID: String, minutes: Int) -> String {
         "\(appID).\(minutes)"
@@ -27,11 +31,7 @@ public enum ScreenTimeEvent {
         return appID.isEmpty ? nil : (appID, minutes)
     }
 
-    /// Minute marks to register for one app: every `step` up to the limit, plus the limit itself.
-    public static func thresholds(limit: Int) -> [Int] {
-        guard limit > 0 else { return [] }
-        var marks = Array(stride(from: step, to: limit, by: step))
-        marks.append(limit)
-        return marks
-    }
+    /// Minute marks to register for one app's daily usage: 5, 10, ... 60, 75, 90, ... 180.
+    public static let thresholds: [Int] =
+        Array(stride(from: step, through: 60, by: step)) + Array(stride(from: 60 + longStep, through: ceiling, by: longStep))
 }

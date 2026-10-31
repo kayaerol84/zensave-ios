@@ -3,14 +3,15 @@ import Foundation
 // Swift port of src/lib/nudge.ts from the web prototype.
 // Keep these in sync with the tests in ZenCoreTests/NudgeTests.swift.
 
-/// An app (or group of apps) whose scrolling time is tracked against a daily limit.
+/// An app (or group of apps) whose scrolling sessions are watched.
 public struct TrackedApp: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var name: String
     public var emoji: String
     /// Minutes used today.
     public var minutes: Int
-    /// Daily limit in minutes. 0 disables the nudge.
+    /// Session limit: minutes in a row before a nudge (see `SessionRule`).
+    /// Stored as `limit` to keep data from earlier versions readable.
     public var limit: Int
 
     public init(id: String, name: String, emoji: String, minutes: Int = 0, limit: Int) {
@@ -59,7 +60,7 @@ public enum Nudge {
     /// Offered next to the enabled alternatives.
     public static let somethingElse = "something else"
 
-    /// A nudge fires once the time spent in an app reaches its limit.
+    /// A nudge fires once the time spent in an app (in one session) reaches its limit.
     public static func shouldNudge(minutes: Int, limit: Int) -> Bool {
         limit > 0 && minutes >= limit
     }
@@ -209,13 +210,13 @@ public enum Habit {
 
 public enum Defaults {
     public static let apps: [TrackedApp] = [
-        TrackedApp(id: "ig", name: "Instagram", emoji: "📸", minutes: 0, limit: 20),
-        TrackedApp(id: "tt", name: "TikTok", emoji: "🎵", minutes: 0, limit: 15),
-        TrackedApp(id: "x", name: "X", emoji: "✖️", minutes: 0, limit: 15),
-        TrackedApp(id: "yt", name: "YouTube", emoji: "▶️", minutes: 0, limit: 30),
+        TrackedApp(id: "ig", name: "Instagram", emoji: "📸", minutes: 0, limit: SessionRule.defaultLimit),
+        TrackedApp(id: "tt", name: "TikTok", emoji: "🎵", minutes: 0, limit: SessionRule.defaultLimit),
+        TrackedApp(id: "x", name: "X", emoji: "✖️", minutes: 0, limit: SessionRule.defaultLimit),
+        TrackedApp(id: "yt", name: "YouTube", emoji: "▶️", minutes: 0, limit: SessionRule.defaultLimit),
     ]
 
-    /// Demo starting minutes, as in the web prototype.
+    /// Demo starting minutes (time used today), as in the web prototype.
     public static let demoMinutes: [String: Int] = ["ig": 12, "tt": 6, "x": 3, "yt": 9]
 
     public static let alternatives: [Alternative] = [

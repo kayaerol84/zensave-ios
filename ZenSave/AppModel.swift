@@ -37,8 +37,11 @@ final class AppModel {
     var toast: String?
     var errorMessage: String?
     private(set) var scrollingAppID: String?
+    /// Minutes in the current demo scroll session.
+    private(set) var demoSessionMinutes = 0
+    /// Longest session that triggered a nudge today, per app (Screen Time mode).
+    private(set) var longestSessions: [String: Int] = [:]
 
-    @ObservationIgnored private var demoNudged = Set<String>()
     @ObservationIgnored private var demoTask: Task<Void, Never>?
 
     init(store: SharedStore = .shared) {
@@ -68,10 +71,11 @@ final class AppModel {
                 return a
             }
         case .screenTime:
-            let usage = store.usage().minutes
+            let usage = store.usage()
+            longestSessions = usage.longestSession
             apps = configured.map { app in
                 var a = app
-                a.minutes = usage[app.id] ?? 0
+                a.minutes = usage.minutes[app.id] ?? 0
                 return a
             }
         }
@@ -79,6 +83,14 @@ final class AppModel {
     }
 
     var totalMinutes: Int { apps.reduce(0) { $0 + $1.minutes } }
+
+    /// Called when the app comes to the foreground.
+    func becameActive() {
+        reload()
+        guard mode == .screenTime else { return }
+        // Repair session watches the extension couldn't restart, without cutting running ones short.
+        try? screenTime.ensureMonitoring()
+    }
 
     // MARK: Screen Time
 
@@ -122,7 +134,7 @@ final class AppModel {
     private func restartMonitoring() {
         guard mode == .screenTime else { return }
         do {
-            try screenTime.startMonitoring(apps: apps)
+            try screenTime.restartMonitoring()
         } catch {
             errorMessage = "Couldn't start Screen Time monitoring: \(error.localizedDescription)"
         }
@@ -130,10 +142,10 @@ final class AppModel {
 
     // MARK: Limits & tracked apps
 
+    /// Sets the session limit: minutes in a row before a nudge.
     func setLimit(_ limit: Int, for appID: String) {
         guard let i = apps.firstIndex(where: { $0.id == appID }) else { return }
-        apps[i].limit = limit
-        demoNudged.remove(appID)
+        apps[i].limit = SessionRule.clamped(limit)
         // Persisted by `saveApps()` when the slider is released.
     }
 
@@ -145,13 +157,16 @@ final class AppModel {
     }
 
     func addApp(name: String, emoji: String) {
-        let id = "app\(Int(Date().timeIntervalSince1970))"
-        apps.append(TrackedApp(id: id, name: name, emoji: emoji.isEmpty ? "📱" : emoji, minutes: 0, limit: 20))
+        // No dots: activity and event names use "." as a separator.
+        let id = "app" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
+        apps.append(TrackedApp(id: id, name: name, emoji: emoji.isEmpty ? "📱" : emoji, minutes: 0, limit: SessionRule.defaultLimit))
         saveApps()
     }
 
     func removeApp(_ appID: String) {
         apps.removeAll { $0.id == appID }
+        if scrollingAppID == appID { stopScrolling() }
+        screenTime.removeSelection(for: appID)
         saveApps()
     }
 
@@ -178,10 +193,13 @@ final class AppModel {
 
     // MARK: Demo scrolling (prototype: 250 ms = 1 minute)
 
+    /// Starts or stops a fake scroll session. Like the real thing, it nudges every
+    /// `limit` minutes in a row, and stopping ends the session.
     func toggleScroll(_ appID: String) {
         if scrollingAppID == appID { stopScrolling(); return }
         stopScrolling()
         scrollingAppID = appID
+        demoSessionMinutes = 0
         demoTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
@@ -195,22 +213,22 @@ final class AppModel {
         demoTask?.cancel()
         demoTask = nil
         scrollingAppID = nil
+        demoSessionMinutes = 0
     }
 
     private func tickDemo(_ appID: String) {
         guard let i = apps.firstIndex(where: { $0.id == appID }) else { return }
         apps[i].minutes += 1
-        let app = apps[i]
-        if Nudge.shouldNudge(app) && !demoNudged.contains(app.id) {
-            demoNudged.insert(app.id)
-            stopScrolling()
-            presentNudge(appName: app.name, minutes: app.minutes)
+        demoSessionMinutes += 1
+        let limit = SessionRule.clamped(apps[i].limit)
+        if demoSessionMinutes % limit == 0 {
+            // Keep "scrolling" until the user answers, so repeat nudges can be seen.
+            presentNudge(appName: apps[i].name, minutes: demoSessionMinutes)
         }
     }
 
     func resetDemo() {
         stopScrolling()
-        demoNudged.removeAll()
         activeNudge = nil
         apps = apps.map { var a = $0; a.minutes = Defaults.demoMinutes[a.id] ?? 0; return a }
     }
@@ -238,6 +256,8 @@ final class AppModel {
         store.recordChoice(choice, app: app)
         choices = store.choices
         activeNudge = nil
+        // Switching to something else ends the demo session.
+        if choice != Nudge.keptScrolling { stopScrolling() }
         toast = choice == Nudge.keptScrolling ? "Logged. Tomorrow's another chance." : "Nice — logged \(choice)."
     }
 

@@ -35,11 +35,11 @@ struct TodayView: View {
     private var subtitle: String {
         switch model.mode {
         case .screenTime:
-            "From Screen Time, updated every \(ScreenTimeEvent.step) minutes."
+            "From Screen Time, in \(ScreenTimeEvent.step)-minute steps. You're nudged when one session runs long."
         case .demo:
             model.scrollingAppID != nil
                 ? "Watching your scroll… sped up for the demo"
-                : "Tap an app below to fake a scroll session."
+                : "Tap an app below to fake a scroll session (1 second = 4 min)."
         }
     }
 }
@@ -49,16 +49,18 @@ private struct AppUsageRow: View {
     let app: TrackedApp
 
     var body: some View {
-        let over = Nudge.shouldNudge(app)
+        let limit = SessionRule.clamped(app.limit)
         let active = model.scrollingAppID == app.id
-        let fraction = app.limit > 0 ? min(1, Double(app.minutes) / Double(app.limit)) : 0
+        // Progress towards the next nudge in the current (demo) session.
+        let session = active ? model.demoSessionMinutes : 0
+        let fraction = Double(session % limit) / Double(limit)
 
         VStack(spacing: 12) {
             HStack(spacing: 12) {
                 Text(app.emoji).font(.title)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(app.name).font(.body.weight(.semibold))
-                    Text("\(Nudge.formatMinutes(app.minutes)) of \(Nudge.formatMinutes(app.limit))")
+                    Text(detail(limit: limit, session: session, active: active))
                         .font(.caption).foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
@@ -70,19 +72,32 @@ private struct AppUsageRow: View {
                     AppPickerButton(appID: app.id)
                 }
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.muted)
-                    Capsule()
-                        .fill(over ? Theme.destructive : Theme.primary)
-                        .frame(width: geo.size.width * fraction)
-                        .animation(.linear(duration: 0.25), value: fraction)
+            if active {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.muted)
+                        Capsule()
+                            .fill(session >= limit ? Theme.destructive : Theme.primary)
+                            .frame(width: geo.size.width * fraction)
+                            .animation(.linear(duration: 0.25), value: fraction)
+                    }
                 }
+                .frame(height: 6)
             }
-            .frame(height: 6)
         }
         .padding(16)
         .cardSurface()
+    }
+
+    private func detail(limit: Int, session: Int, active: Bool) -> String {
+        var parts = ["\(Nudge.formatMinutes(app.minutes)) today"]
+        if active {
+            parts.append("this session \(Nudge.formatMinutes(session))")
+        } else if let longest = model.longestSessions[app.id] {
+            parts.append("longest session \(Nudge.formatMinutes(longest))")
+        }
+        parts.append("nudge after \(Nudge.formatMinutes(limit)) in a row")
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -114,7 +129,7 @@ private struct ScreenTimeCallout: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Track your real scrolling").font(.headline)
-            Text("Unscroll uses Screen Time to notice when you've spent too long in an app — even when Unscroll is closed — and nudges you to switch. Your usage stays on your iPhone.")
+            Text("Unscroll uses Screen Time to notice when one session in an app runs too long — even when Unscroll is closed — and nudges you to switch. Your usage stays on your iPhone.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.mutedForeground)
             Button("Turn on Screen Time") {

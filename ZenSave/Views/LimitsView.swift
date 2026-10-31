@@ -8,8 +8,8 @@ struct LimitsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(model.mode == .screenTime
-                 ? "Pick each app in Screen Time and set a daily limit. You'll get a nudge when you reach it."
-                 : "Set a daily limit for each app. Long-press to rename or remove.")
+                 ? "Pick each app in Screen Time and choose how long one session may last. You'll get a nudge when you scroll that long in a row, and again every time that much more passes."
+                 : "Choose how long one session in each app may last before you're nudged. Long-press to rename or remove.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.mutedForeground)
 
@@ -63,7 +63,7 @@ private struct LimitRow: View {
             HStack {
                 Text("\(app.emoji) \(app.name)").font(.body.weight(.semibold))
                 Spacer()
-                Text(Nudge.formatMinutes(app.limit)).font(.body.weight(.semibold)).foregroundStyle(Theme.primary)
+                Text("\(Nudge.formatMinutes(app.limit)) in a row").font(.body.weight(.semibold)).foregroundStyle(Theme.primary)
                 if model.mode == .screenTime {
                     AppPickerButton(appID: app.id)
                 }
@@ -73,13 +73,17 @@ private struct LimitRow: View {
                     get: { Double(app.limit) },
                     set: { model.setLimit(Int($0), for: app.id) }
                 ),
-                in: 5...120,
-                step: 5,
+                in: Double(SessionRule.limitRange.lowerBound)...Double(SessionRule.limitRange.upperBound),
+                step: 1,
                 onEditingChanged: { editing in
                     if !editing { model.saveApps() }
                 }
             )
             .tint(Theme.primary)
+            Text("Short breaks (about \(SessionRule.breakAllowance) min) don't end a session.")
+                .font(.caption)
+                .foregroundStyle(Theme.mutedForeground)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)
         .cardSurface()

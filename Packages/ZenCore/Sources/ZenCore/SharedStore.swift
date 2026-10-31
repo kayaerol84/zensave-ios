@@ -19,18 +19,35 @@ public struct CoachProfile: Codable, Hashable, Sendable {
     }
 }
 
-/// Minutes used per tracked app on one calendar day. Written by the Screen Time
-/// monitor extension, read by the app. Resets when the day changes.
+/// Minutes used per tracked app on one calendar day, written by the Screen Time monitor
+/// extension and read by the app. Resets when the day changes.
 public struct DailyUsage: Codable, Equatable, Sendable {
     public var day: String
+    /// Total minutes used today (in `ScreenTimeEvent` steps).
     public var minutes: [String: Int]
-    /// Apps already nudged on `day`, so each app nudges at most once a day.
-    public var nudged: Set<String>
+    /// Longest session that triggered a nudge today.
+    public var longestSession: [String: Int]
+    /// Session nudges sent today.
+    public var nudges: [String: Int]
 
-    public init(day: String, minutes: [String: Int] = [:], nudged: Set<String> = []) {
+    public init(day: String, minutes: [String: Int] = [:], longestSession: [String: Int] = [:], nudges: [String: Int] = [:]) {
         self.day = day
         self.minutes = minutes
-        self.nudged = nudged
+        self.longestSession = longestSession
+        self.nudges = nudges
+    }
+
+    // Tolerates blobs written by older versions, which lack some keys.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        day = try c.decode(String.self, forKey: .day)
+        minutes = try c.decodeIfPresent([String: Int].self, forKey: .minutes) ?? [:]
+        longestSession = try c.decodeIfPresent([String: Int].self, forKey: .longestSession) ?? [:]
+        nudges = try c.decodeIfPresent([String: Int].self, forKey: .nudges) ?? [:]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case day, minutes, longestSession, nudges
     }
 }
 
@@ -59,6 +76,7 @@ public final class SharedStore: @unchecked Sendable {
         static let habitOverrides = "zen.habitOverrides"
         static let profile = "zen.profile"
         static let usage = "zen.usage"
+        static let sessions = "zen.sessions"
     }
 
     private func load<T: Decodable>(_ key: String, as _: T.Type) -> T? {
@@ -73,7 +91,14 @@ public final class SharedStore: @unchecked Sendable {
     // MARK: Configuration (written by the app)
 
     public var apps: [TrackedApp] {
-        get { load(Key.apps, as: [TrackedApp].self) ?? Defaults.apps }
+        // Limits are session limits; older versions stored daily limits of up to 120 minutes.
+        get {
+            (load(Key.apps, as: [TrackedApp].self) ?? Defaults.apps).map { app in
+                var a = app
+                a.limit = SessionRule.clamped(a.limit)
+                return a
+            }
+        }
         set { save(newValue, Key.apps) }
     }
 
@@ -116,22 +141,22 @@ public final class SharedStore: @unchecked Sendable {
         return DailyUsage(day: today)
     }
 
-    /// Records that `appID` reached `minutes` today. Usage only goes up within a day.
-    /// Returns the app with today's minutes filled in if this report should fire a nudge
-    /// (it reached the limit and has not been nudged yet today), otherwise nil.
-    @discardableResult
-    public func reportUsage(appID: String, minutes: Int, now: Date = Date()) -> TrackedApp? {
+    /// Records that `appID` has been used for `minutes` today. Usage only goes up within a day.
+    /// This only feeds the Today screen; nudges come from sessions (see `Session.swift`).
+    public func reportUsage(appID: String, minutes: Int, now: Date = Date()) {
         var u = usage(now: now)
         u.minutes[appID] = max(u.minutes[appID] ?? 0, minutes)
-        var fire: TrackedApp?
-        if var app = apps.first(where: { $0.id == appID }) {
-            app.minutes = u.minutes[appID] ?? 0
-            if Nudge.shouldNudge(app) && !u.nudged.contains(appID) {
-                u.nudged.insert(appID)
-                fire = app
-            }
-        }
-        save(u, Key.usage)
-        return fire
+        saveUsage(u)
+    }
+
+    func saveUsage(_ usage: DailyUsage) {
+        save(usage, Key.usage)
+    }
+
+    // MARK: Sessions (written by the app and the extension)
+
+    var sessions: [String: SessionState] {
+        get { load(Key.sessions, as: [String: SessionState].self) ?? [:] }
+        set { save(newValue, Key.sessions) }
     }
 }
