@@ -13,7 +13,7 @@ struct ZenSaveApp: App {
                 .preferredColorScheme(.dark)
                 .onChange(of: scenePhase) { _, phase in
                     // Pick up usage and choices written by the extension / notification buttons.
-                    if phase == .active { appDelegate.model.reload() }
+                    if phase == .active { appDelegate.model.becameActive() }
                 }
         }
     }

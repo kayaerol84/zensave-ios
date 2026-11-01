@@ -30,6 +30,8 @@ targets:
       # Shared logic is compiled straight into each target (not linked as a Swift package),
       # because Xcode can't resolve local packages when the path contains "@".
       - path: Packages/ZenCore/Sources/ZenCore
+      # Screen Time scheduling shared with the extension (it starts each next session window).
+      - Shared
     dependencies:
       - target: ZenSaveMonitor
       - sdk: FamilyControls.framework
@@ -66,8 +68,11 @@ targets:
     sources:
       - ZenSaveMonitor
       - path: Packages/ZenCore/Sources/ZenCore
+      - Shared
     dependencies:
       - sdk: DeviceActivity.framework
+      - sdk: FamilyControls.framework
+      - sdk: ManagedSettings.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourcompany.zensave.monitor

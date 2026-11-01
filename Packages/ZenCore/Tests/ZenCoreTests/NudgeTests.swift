@@ -120,20 +120,21 @@ final class SharedStoreTests: XCTestCase {
         return SharedStore(defaults: UserDefaults(suiteName: suite)!)
     }
 
-    func testNudgesOncePerDayWhenUsageReachesLimit() {
+    func testDailyUsageResetsOnANewDay() {
         let store = makeStore()
-        store.apps = [TrackedApp(id: "ig", name: "Instagram", emoji: "📸", limit: 20)]
         let now = Date(timeIntervalSince1970: 1_000_000_000)
+        store.reportUsage(appID: "ig", minutes: 20, now: now)
+        XCTAssertEqual(store.usage(now: now).minutes, ["ig": 20])
+        XCTAssertEqual(store.usage(now: now.addingTimeInterval(86_400)).minutes, [:])
+    }
 
-        XCTAssertNil(store.reportUsage(appID: "ig", minutes: 15, now: now))
-        let fired = store.reportUsage(appID: "ig", minutes: 20, now: now)
-        XCTAssertEqual(fired?.name, "Instagram")
-        XCTAssertEqual(fired?.minutes, 20)
-        XCTAssertNil(store.reportUsage(appID: "ig", minutes: 25, now: now), "only one nudge per app per day")
-
-        let tomorrow = now.addingTimeInterval(86_400)
-        XCTAssertEqual(store.usage(now: tomorrow).minutes, [:], "usage resets on a new day")
-        XCTAssertNotNil(store.reportUsage(appID: "ig", minutes: 20, now: tomorrow))
+    func testOldDailyLimitsAreClampedToSessionLimits() {
+        let store = makeStore()
+        store.apps = [
+            TrackedApp(id: "ig", name: "Instagram", emoji: "📸", limit: 120),
+            TrackedApp(id: "tt", name: "TikTok", emoji: "🎵", limit: 0),
+        ]
+        XCTAssertEqual(store.apps.map(\.limit), [60, 5])
     }
 
     func testUsageNeverGoesDownWithinADay() {
@@ -162,10 +163,12 @@ final class ScreenTimeEventTests: XCTestCase {
         XCTAssertNil(ScreenTimeEvent.parse(".5"))
     }
 
-    func testThresholdsEndExactlyAtTheLimit() {
-        XCTAssertEqual(ScreenTimeEvent.thresholds(limit: 20), [5, 10, 15, 20])
-        XCTAssertEqual(ScreenTimeEvent.thresholds(limit: 12), [5, 10, 12])
-        XCTAssertEqual(ScreenTimeEvent.thresholds(limit: 5), [5])
-        XCTAssertEqual(ScreenTimeEvent.thresholds(limit: 0), [])
+    func testDailyThresholdsAreFineForAnHourThenCoarser() {
+        let marks = ScreenTimeEvent.thresholds
+        XCTAssertEqual(Array(marks.prefix(3)), [5, 10, 15])
+        XCTAssertTrue(marks.contains(60))
+        XCTAssertEqual(Array(marks.suffix(2)), [165, 180])
+        XCTAssertEqual(marks, marks.sorted())
+        XCTAssertEqual(Set(marks).count, marks.count)
     }
 }

@@ -1,11 +1,10 @@
-import DeviceActivity
 import FamilyControls
 import Foundation
-import ManagedSettings
 
-/// Wraps Apple's Screen Time APIs:
+/// Wraps Apple's Screen Time APIs for the app:
 /// - FamilyControls: asks the user for permission and lets them pick apps (FamilyActivityPicker).
-/// - DeviceActivity: schedules daily monitoring with usage thresholds, delivered to ZenSaveMonitor.
+/// - DeviceActivity (through `SessionScheduler`): watches each tracked app for long sessions;
+///   the ZenSaveMonitor extension gets the events and nudges.
 ///
 /// iOS never tells the app *which* app a token is (privacy), so every tracked entry pairs a
 /// user-picked selection with the name the user sees in the nudge ("Instagram").
@@ -13,9 +12,7 @@ import ManagedSettings
 final class ScreenTimeManager {
     static let shared = ScreenTimeManager()
 
-    private let center = DeviceActivityCenter()
-    private let selectionsKey = "zen.selections"
-    private let defaults = UserDefaults(suiteName: SharedStore.appGroupID) ?? .standard
+    private let scheduler = SessionScheduler()
 
     var isAuthorized: Bool {
         AuthorizationCenter.shared.authorizationStatus == .approved
@@ -29,62 +26,35 @@ final class ScreenTimeManager {
     // MARK: Selections per tracked app
 
     func selection(for appID: String) -> FamilyActivitySelection {
-        guard let data = selectionsData[appID],
-              let selection = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data)
-        else { return FamilyActivitySelection() }
-        return selection
+        scheduler.selection(for: appID)
     }
 
     func setSelection(_ selection: FamilyActivitySelection, for appID: String) {
-        var all = selectionsData
-        all[appID] = try? JSONEncoder().encode(selection)
-        selectionsData = all
+        scheduler.setSelection(selection, for: appID)
+    }
+
+    func removeSelection(for appID: String) {
+        scheduler.removeSelection(for: appID)
     }
 
     func hasSelection(for appID: String) -> Bool {
-        let s = selection(for: appID)
-        return !(s.applicationTokens.isEmpty && s.categoryTokens.isEmpty && s.webDomainTokens.isEmpty)
-    }
-
-    private var selectionsData: [String: Data] {
-        get { (defaults.dictionary(forKey: selectionsKey) as? [String: Data]) ?? [:] }
-        set { defaults.set(newValue, forKey: selectionsKey) }
+        scheduler.hasSelection(for: appID)
     }
 
     // MARK: Monitoring
 
-    /// (Re)starts the all-day schedule with one event per 5-minute mark per tracked app.
-    /// Call whenever apps, selections or limits change.
-    func startMonitoring(apps: [TrackedApp]) throws {
-        var events: [DeviceActivityEvent.Name: DeviceActivityEvent] = [:]
-        for app in apps where hasSelection(for: app.id) {
-            let s = selection(for: app.id)
-            for minutes in ScreenTimeEvent.thresholds(limit: app.limit) {
-                let name = DeviceActivityEvent.Name(ScreenTimeEvent.name(appID: app.id, minutes: minutes))
-                events[name] = DeviceActivityEvent(
-                    applications: s.applicationTokens,
-                    categories: s.categoryTokens,
-                    webDomains: s.webDomainTokens,
-                    threshold: DateComponents(minute: minutes),
-                    // Count usage from earlier today when monitoring starts mid-day.
-                    includesPastActivity: true
-                )
-            }
-        }
+    /// Restarts all monitoring from the saved configuration. Call whenever apps,
+    /// picked apps or session limits change (it ends any session in progress).
+    func restartMonitoring() throws {
+        try scheduler.restartAll()
+    }
 
-        let activity = DeviceActivityName(ScreenTimeEvent.activityName)
-        center.stopMonitoring([activity])
-        guard !events.isEmpty else { return }
-
-        let schedule = DeviceActivitySchedule(
-            intervalStart: DateComponents(hour: 0, minute: 0),
-            intervalEnd: DateComponents(hour: 23, minute: 59),
-            repeats: true
-        )
-        try center.startMonitoring(activity, during: schedule, events: events)
+    /// Re-arms session watches that stopped, without interrupting running ones.
+    func ensureMonitoring() throws {
+        try scheduler.ensureRunning()
     }
 
     func stopMonitoring() {
-        center.stopMonitoring()
+        scheduler.stopAll()
     }
 }
